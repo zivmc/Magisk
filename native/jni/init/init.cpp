@@ -102,7 +102,7 @@ static void decompress_ramdisk() {
 	uint8_t *buf;
 	size_t sz;
 	mmap_ro(ramdisk_xz, buf, sz);
-	int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC);
+	int fd = xopen(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
 	unxz(fd, buf, sz);
 	munmap(buf, sz);
 	close(fd);
@@ -113,7 +113,7 @@ static void decompress_ramdisk() {
 }
 
 int dump_magisk(const char *path, mode_t mode) {
-	int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, mode);
+	int fd = xopen(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, mode);
 	if (fd < 0)
 		return 1;
 	if (!unxz(fd, magisk_xz, sizeof(magisk_xz)))
@@ -123,7 +123,7 @@ int dump_magisk(const char *path, mode_t mode) {
 }
 
 static int dump_manager(const char *path, mode_t mode) {
-	int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, mode);
+	int fd = xopen(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, mode);
 	if (fd < 0)
 		return 1;
 	if (!unxz(fd, manager_xz, sizeof(manager_xz)))
@@ -217,16 +217,19 @@ int main(int argc, char *argv[]) {
 		// This will also mount /sys and /proc
 		load_kernel_info(&cmd);
 
-		if (cmd.force_normal_boot) {
-			init = make_unique<ABFirstStageInit>(argv, &cmd);
+		if (access("/apex", F_OK) == 0) {
+			if (cmd.force_normal_boot)
+				init = make_unique<ForcedFirstStageInit>(argv, &cmd);
+			else if (cmd.skip_initramfs)
+				init = make_unique<SARFirstStageInit>(argv, &cmd);
+			else
+				init = make_unique<FirstStageInit>(argv, &cmd);
 		} else if (cmd.skip_initramfs) {
 			init = make_unique<SARInit>(argv, &cmd);
 		} else {
 			decompress_ramdisk();
 			if (access("/sbin/recovery", F_OK) == 0 || access("/system/bin/recovery", F_OK) == 0)
 				init = make_unique<RecoveryInit>(argv, &cmd);
-			else if (access("/apex", F_OK) == 0)
-				init = make_unique<AFirstStageInit>(argv, &cmd);
 			else
 				init = make_unique<RootFSInit>(argv, &cmd);
 		}
