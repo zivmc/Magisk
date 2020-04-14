@@ -50,7 +50,7 @@ if (entry->d_name == "."sv || entry->d_name == ".."sv) \
 	continue;\
 }
 
-static void post_order_walk(int dirfd, const function<int(int, dirent *)> &&fn) {
+static void post_order_walk(int dirfd, const function<void(int, dirent *)> &&fn) {
 	auto dir = xopen_dir(dirfd);
 	if (!dir) return;
 
@@ -62,8 +62,21 @@ static void post_order_walk(int dirfd, const function<int(int, dirent *)> &&fn) 
 	}
 }
 
-static int remove_at(int dirfd, struct dirent *entry) {
-	return unlinkat(dirfd, entry->d_name, entry->d_type == DT_DIR ? AT_REMOVEDIR : 0);
+static void pre_order_walk(int dirfd, const function<bool(int, dirent *)> &&fn) {
+	auto dir = xopen_dir(dirfd);
+	if (!dir) return;
+
+	for (dirent *entry; (entry = xreaddir(dir.get()));) {
+		SKIP_DOTS
+		if (!fn(dirfd, entry))
+			continue;
+		if (entry->d_type == DT_DIR)
+			pre_order_walk(xopenat(dirfd, entry->d_name, O_RDONLY | O_CLOEXEC), std::move(fn));
+	}
+}
+
+static void remove_at(int dirfd, struct dirent *entry) {
+	unlinkat(dirfd, entry->d_name, entry->d_type == DT_DIR ? AT_REMOVEDIR : 0);
 }
 
 void rm_rf(const char *path) {
@@ -127,7 +140,7 @@ void cp_afc(const char *src, const char *dest) {
 		unlink(dest);
 		if (S_ISREG(a.st.st_mode)) {
 			int sfd = xopen(src, O_RDONLY | O_CLOEXEC);
-			int dfd = xopen(dest, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC);
+			int dfd = xopen(dest, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0);
 			xsendfile(dfd, sfd, nullptr, a.st.st_size);
 			close(sfd);
 			close(dfd);
@@ -158,7 +171,7 @@ void clone_dir(int src, int dest) {
 			}
 			case DT_REG: {
 				int sfd = xopenat(src, entry->d_name, O_RDONLY | O_CLOEXEC);
-				int dfd = xopenat(dest, entry->d_name, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC);
+				int dfd = xopenat(dest, entry->d_name, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0);
 				xsendfile(dfd, sfd, nullptr, a.st.st_size);
 				fsetattr(dfd, &a);
 				close(dfd);
@@ -359,19 +372,19 @@ void parse_mnt(const char *file, const function<bool(mntent*)> &fn) {
 
 void backup_folder(const char *dir, vector<raw_file> &files) {
 	char path[4096];
-	realpath(dir, path);
+	xrealpath(dir, path);
 	int len = strlen(path);
-	post_order_walk(xopen(dir, O_RDONLY), [&](int dfd, dirent *entry) -> int {
+	pre_order_walk(xopen(dir, O_RDONLY), [&](int dfd, dirent *entry) -> bool {
 		int fd = xopenat(dfd, entry->d_name, O_RDONLY);
 		if (fd < 0)
-			return -1;
+			return false;
 		run_finally f([&]{ close(fd); });
 		if (fd_path(fd, path, sizeof(path)) < 0)
-			return -1;
+			return false;
 		raw_file file;
 		file.path = path + len + 1;
 		if (fgetattr(fd, &file.attr) < 0)
-			return -1;
+			return false;
 		if (entry->d_type == DT_REG) {
 			fd_full_read(fd, file.buf, file.sz);
 		} else if (entry->d_type == DT_LNK) {
@@ -381,14 +394,14 @@ void backup_folder(const char *dir, vector<raw_file> &files) {
 			memcpy(file.buf, path, file.sz);
 		}
 		files.emplace_back(std::move(file));
-		return 0;
+		return true;
 	});
 }
 
 void restore_folder(const char *dir, vector<raw_file> &files) {
 	string base(dir);
-	// Reversed post-order means folders will always be first
-	for (raw_file &file : reversed(files)) {
+	// Pre-order means folders will always be first
+	for (raw_file &file : files) {
 		string path = base + "/" + file.path;
 		if (S_ISDIR(file.attr.st.st_mode)) {
 			mkdirs(path.data(), 0);

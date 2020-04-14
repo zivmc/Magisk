@@ -19,6 +19,7 @@ LOCAL_SRC_FILES := \
 	core/socket.cpp \
 	core/db.cpp \
 	core/scripting.cpp \
+	core/restorecon.cpp \
 	magiskhide/magiskhide.cpp \
 	magiskhide/proc_monitor.cpp \
 	magiskhide/hide_utils.cpp \
@@ -60,6 +61,7 @@ LOCAL_SRC_FILES := \
 	init/rootdir.cpp \
 	init/getinfo.cpp \
 	init/twostage.cpp \
+	core/socket.cpp \
 	magiskpolicy/api.cpp \
 	magiskpolicy/magiskpolicy.cpp \
 	magiskpolicy/rules.cpp \
